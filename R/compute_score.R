@@ -1,5 +1,10 @@
+#' @name compute_scores
+#' @aliases comp_score
+#' 
+#' @title
 #' Compute forecast score
 #' 
+#' @description
 #' This function computes the residual variance in the forecast interval
 #' 
 #' @param x data vector, time series
@@ -63,3 +68,17 @@ compute_score <- function(x,n=10, erup.i=NULL, skill=NULL){
   if (!is.null(skill)) attr(score, 'skill') <- 1-skill
   score
 }
+
+#'@rdname compute_scores
+#'@param clim number of years leading the forecast used as baseline
+#'@export
+comp_score <- function(x, n=10, clim=5){
+  climbase <- filter(x, rep(1/clim, clim), sides=1)
+  xind <- outer(seq(along=x), 1:n, '+')
+  xind[apply(xind > length(x), 1, any)] <- NA
+  xanom <- array(x[xind], dim(xind)) - climbase[rep(seq(along=climbase), n)]
+  score <- sqrt(apply(xanom**2, 1, mean))
+  return(score)
+}
+
+
