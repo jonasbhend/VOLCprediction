@@ -1,8 +1,11 @@
 Package: VOLCprediction
-Title: 
-Description: 
+Title: analyse influence of volcanic eruptions on decadal predictability
+Description: This package bundles the functions to analyse and plot
 Version: 0.1
 Authors@R: 'Jonas Bhend <jonas.bhend@gmx.ch> [aut, cre]'
-Depends: R (>= 3.0.3)
+Depends:
+    R (>= 3.0.3),
+    ncdf,
+    xtable
 License: GPL-3
 LazyData: true
