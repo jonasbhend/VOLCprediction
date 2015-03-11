@@ -1,6 +1,7 @@
 Package: VOLCprediction
 Title: analyse influence of volcanic eruptions on decadal predictability
 Description: This package bundles the functions to analyse and plot
+    the effect of volcanic eruptions on decadal prediction
 Version: 0.1
 Authors@R: 'Jonas Bhend <jonas.bhend@gmx.ch> [aut, cre]'
 Depends:

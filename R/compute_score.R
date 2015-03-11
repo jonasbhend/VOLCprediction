@@ -1,84 +1,130 @@
 #' @name compute_scores
 #' @aliases comp_score
+#' @aliases all_scores
 #' 
 #' @title
 #' Compute forecast score
 #' 
 #' @description
-#' This function computes the residual variance in the forecast interval
+#' This function computes the residual variance in the forecast interval.
+#' This is the variance unexplained by the prediction in case the forecasting
+#' system has exactly zero skill. In case the forecasting system has skill,
+#' only a fraction of the residual variance is computed. Bounding assumptions 
+#' on how skill plays out with an eruption in the forecast interval are
+#' computed. These bounding assumptions are: i) skill is not influenced by the 
+#' eruption (optimistic), ii) all skill is lost after an eruption (pessimistic).
 #' 
-#' @param x data vector, time series
-#' @param n length of prediction interval (defaults to 10 years)
-#' @param erup.i indices in x with eruptions
+#' @param x input object of class 'NetCDF'
+#' @param aod AOD time series of volcanic eruptions
+#' @param n length of prediction interval in years (defaults to 10 years)
+#' @param clim length of lead-in climatology to compute the forecasts
 #' @param skill vector of skills of forecast (see details)
 #'
 #' @details
-#' to be written
+#' The old function used a skill definition in fraction
+#' of standard deviation, the new function defines skill as the fraction of
+#' variance explained in the forecast period. Otherwise the two functions 
+#' are identical.
 #' 
 #' @examples
 #' ## set up a time series of pseudo-observations and plot
-#' xx <- rnorm(200)
-#' erup.i <- sort(ceiling(runif(3, min=0, max=length(xx))))
-#' xcolour <- rep(1, length(xx))
-#' before.i <- outer(erup.i, 1:before, '-') ## check whether this is right
-#' after.i <- outer(erup.i, 1:after, '+') ## check whether this is right
-#' xcolour[after.i[after.i > 0 & after.i <= length(xx)]] <- 2
-#' xcolour[before.i[before.i > 0 & before.i <= length(xx)]] <- 3
-#' plot(xx, type='b', xlab='time', ylab='temperature', col=xcolour)
+#' nn <- 200
+#' ## dates of virtual eruptions
+#' erup.i <- sort(ceiling(runif(10, min=0, max=nn)))
+#' ## indices of effect of volcanoes
+#' iafter <- outer(erup.i, 1:3, '+')
+#' iafter <- iafter[iafter <= length(xx)]
+#' xx <- rnorm(nn)
+#' xx[iafter] <- rnorm(length(iafter), sd=2)
+#' plot(xx, type='l', xlab='time', ylab='temperature')
 #' abline(v=erup.i, lty=3)
 #' 
 #' ## compute the scores
-#' fscore <- compute_score(xx, n=10, erup.i=erup.i, skill=skill.init)
-#' vol.i <- outer(erup.i, 1:n, '-')
-#' vol.i <- vol.i[vol.i > 0 & vol.i <= ncol(fscore)]
-#' novol.i <- setdiff(seq(along=xx), vol.i)
-#' novol.i <- novol.i[novol.i > 0 & novol.i <= ncol(fscore)]
-#' hist(fscore[1,novol.i,50], freq=F, col='grey', xlim=range(pretty(fscore[1,,])))
-#' hist(fscore[1,vol.i,], freq=F, add=T, density=15)
+#' fscore <- comp_score(xx, n=10, clim=1, erup.i=erup.i, skill=seq(0.05,0.95,0.1))
 #' 
 #' @return array of forecast scores
 #' 
 #' @keywords utilities
 #' @export
-compute_score <- function(x,n=10, erup.i=NULL, skill=NULL){
-  
-  nx      <- length(x)
-  if (is.null(erup.i) | is.null(skill)){
-    score   <- rep(NA, (nx - n))
-    for (i in 1:(nx-n)){
-      score[i] <- sqrt(mean((x[i+1:n]-x[i])**2))
+comp_score <- function(x, aod=NULL, n=10, clim=10, skill=0){
+  ## first put time dimension first
+  xdims <- dim(x)
+  nseas <- median(table(floor(attr(x, 'time'))))
+  nclim <- clim*nseas
+  xtmp <- as.vector(t(collapse2mat(x, first=F)))
+  ## compute the base climatology
+  xmn <- apply.NetCDF(x, seq(dim(x))[-length(dim(x))], filter, rep(1/clim, clim), sides=1)
+  climbase <- as.vector(t(collapse2mat(xmn, first=F)))  
+  ## compute indices of forecasts in forecast vector
+  xind <- outer(seq(along=xtmp), 1:(n*nseas), '+')
+  xind[(n + rep(attr(x, 'time'), length=length(xtmp))) > max(attr(x, 'time')), ] <- NA
+  climind <- outer(seq(along=xtmp), rep(1:nseas, n) - nseas, '+')
+  climind[(rep(attr(x, 'time'), length=length(xtmp)) - clim + 1 < min(attr(x, 'time')))] <- NA
+  xa2 <- (array(xtmp[xind], dim(xind)) - array(climbase[climind], dim(xind)))**2
+  ## compute scores without volcanic influence
+  opt <- array(sqrt((1 - skill) %*% t(apply(xa2, 1, mean))), c(length(skill), xdims[length(xdims)], xdims[-length(xdims)]))
+  opt <- aperm(opt, c(1, 3:(length(xdims)+1), 2))
+  ## write attributes to forecast scores
+  atns <- names(attributes(x))[-grep('dim', names(attributes(x)))]
+  for (atn in atns) attr(opt, atn) <- attr(x, atn)
+  ## compute skill if volcanic eruption is present
+  if (!is.null(aod)){
+    ei <- rep(c(FALSE, diff(aod[1,]) > 0), length=length(xtmp))
+    eind <- t(apply(array(ei[xind], dim(xind)), 1, function(x) cumsum(x) == 0))
+    pess <- array(NA, c(length(skill), xdims[length(xdims)], prod(xdims[-length(xdims)])))
+    for (si in seq(along=skill)){
+      pess[si,,] <- sqrt(apply(xa2 * (1 - skill[si]*eind), 1, mean))
     }
-  } else {
-    ns      <- length(skill)
-    score   <- array(NA, c(2,nx-n, length(skill)))
-    skill   <- (1-skill)
-    index   <- rep(1, length(skill))
-    for (i in 1:(nx-n)){
-      tmp         <- x[i+1:n]-x[i] 
-      temp        <- tmp %*% t(skill)
-      min.erup    <- (intersect(1:n, erup.i-i))[1]
-      score[1,i,] <- sqrt(apply(temp**2, 2, mean))
-      if (!is.na(min.erup)){
-        temp[min.erup:n,] <- tmp[min.erup:n] %*% t(index)
-      }
-      score[2,i,] <- sqrt(apply(temp**2, 2, mean))
-    }
-    dimnames(score) <- list(c('optimistic', 'pessimistic'), names(x), skill)
+    pess <- aperm(pess, c(1,3,2))
+    attributes(pess) <- attributes(opt)
+    ## compute cumulative aod in climatology
+    climaod <- filter(aod[1,], rep(1/nclim, nclim), sides=1)
+    erupaod <- c(climaod[-(1:nclim)], rep(NA, nclim))
+    attributes(climaod) <- attributes(erupaod) <- attributes(aod)
   }
-  if (!is.null(skill)) attr(score, 'skill') <- 1-skill
-  score
+    
+  ## write output  
+  olist <- list(optimistic=opt)
+  if (!is.null(aod)){
+    olist$pessimistic <- pess
+    olist$erup.i <- ei[seq(climaod)]
+    olist$climaod <- climaod
+    olist$erupaod <- erupaod
+  }
+  
+  return(olist)
 }
 
-#'@rdname compute_scores
-#'@param clim number of years leading the forecast used as baseline
-#'@export
-comp_score <- function(x, n=10, clim=5){
-  climbase <- filter(x, rep(1/clim, clim), sides=1)
-  xind <- outer(seq(along=x), 1:n, '+')
-  xind[apply(xind > length(x), 1, any)] <- NA
-  xanom <- array(x[xind], dim(xind)) - climbase[rep(seq(along=climbase), n)]
-  score <- sqrt(apply(xanom**2, 1, mean))
-  return(score)
+#' @rdname compute_score
+#' @param xin input object of class NetCDF containing climate variable
+#' @param aod AOD time series of volcanic eruptions (eruptions are positive values)
+#' @param ... additional arguments passed to \code{\link{comp_score}}
+#' @export
+#' 
+all_scores <- function(xin, aod=NULL, ...){
+  ## check that corresponding timesteps have been selected
+  if (!is.null(aod)){
+    xtime <- attr(xin, 'time')
+    atime <- attr(aod, 'time')
+    if (sum(xtime %in% atime) < 1){
+      stop('No corresponding time steps in AOD and input time series')
+    }
+    if (length(xtime) != length(atime) | ! all(xtime %in% atime) | ! all(atime %in% xtime)){
+      ctime <- floor(xtime[xtime %in% atime])
+      xin <- select_time(xin, ctime[1], ctime[length(ctime)])
+      aod <- select_time(aod, ctime[1], ctime[length(ctime)])
+    }    
+  }
+    
+  scores <- comp_score(x=xin, aod=aod, ...)
+  return(scores)
 }
 
-
+#' @rdname compute_score
+#' @export
+get_eruptions <- function(aod){
+  if (nrow(aod) > 1) stop('AOD is not single time series')
+  ei <- which(diff(aod[1,]) > 0)
+  erup.i <- ei[unique(c(1, which(diff(ei) > 1) + 1))] + 1
+  return(erup.i)
+}
